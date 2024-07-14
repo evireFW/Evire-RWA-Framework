@@ -1,123 +1,337 @@
-const AssetTokenization = artifacts.require("AssetTokenization");
+const { expect } = require("chai");
+const { ethers } = require("hardhat");
 
-contract("AssetTokenization", (accounts) => {
-  let assetTokenization;
-  const owner = accounts[0];
-  const user1 = accounts[1];
-  const user2 = accounts[2];
+describe("AssetTokenization", function () {
+  let AssetTokenization;
+  let owner, addr1, addr2;
+  let assets;
 
-  beforeEach(async () => {
-    assetTokenization = await AssetTokenization.new({ from: owner });
+  beforeEach(async function () {
+    [owner, addr1, addr2] = await ethers.getSigners();
+    const AssetTokenizationFactory = await ethers.getContractFactory("AssetTokenization");
+    AssetTokenization = await AssetTokenizationFactory.deploy();
+    await AssetTokenization.deployed();
+    assets = {};
   });
 
-  describe("Token Issuance", () => {
-    it("should issue tokens correctly", async () => {
-      const assetId = 1;
-      const tokenAmount = 100;
+  describe("tokenizeAsset", function () {
+    it("should tokenize a new asset correctly", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: true,
+        totalFragments: 100
+      };
 
-      await assetTokenization.issueToken(assetId, user1, tokenAmount, { from: owner });
-      const balance = await assetTokenization.balanceOf(user1, assetId);
+      const assetId = await AssetTokenization.tokenizeAsset(assets, params, owner.address);
 
-      assert.equal(balance.toNumber(), tokenAmount, "Token amount should be correctly issued to user1");
+      expect(assets[assetId].id).to.equal(assetId);
+      expect(assets[assetId].assetType).to.equal(params.assetType);
+      expect(assets[assetId].value).to.equal(params.initialValue);
+      expect(assets[assetId].owner).to.equal(owner.address);
+      expect(assets[assetId].isFragmented).to.be.true;
+      expect(assets[assetId].totalFragments).to.equal(params.totalFragments);
+      expect(assets[assetId].fragmentBalances[owner.address]).to.equal(params.totalFragments);
     });
 
-    it("should fail if not issued by owner", async () => {
-      const assetId = 1;
-      const tokenAmount = 100;
+    it("should emit AssetTokenized and AssetFragmented events", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: true,
+        totalFragments: 100
+      };
 
-      try {
-        await assetTokenization.issueToken(assetId, user1, tokenAmount, { from: user1 });
-        assert.fail("Issue token should only be allowed by the owner");
-      } catch (error) {
-        assert(error.toString().includes("revert"), "Expected revert error");
-      }
-    });
-  });
-
-  describe("Token Transfer", () => {
-    it("should transfer tokens correctly", async () => {
-      const assetId = 1;
-      const tokenAmount = 100;
-
-      await assetTokenization.issueToken(assetId, user1, tokenAmount, { from: owner });
-      await assetTokenization.transferToken(assetId, user1, user2, 50, { from: user1 });
-      const balance1 = await assetTokenization.balanceOf(user1, assetId);
-      const balance2 = await assetTokenization.balanceOf(user2, assetId);
-
-      assert.equal(balance1.toNumber(), 50, "User1 should have 50 tokens left");
-      assert.equal(balance2.toNumber(), 50, "User2 should have 50 tokens received");
+      await expect(AssetTokenization.tokenizeAsset(assets, params, owner.address))
+        .to.emit(AssetTokenization, "AssetTokenized")
+        .withArgs(params.assetType, owner.address, params.initialValue)
+        .and.to.emit(AssetTokenization, "AssetFragmented")
+        .withArgs(params.assetType, params.totalFragments);
     });
 
-    it("should fail transfer if sender doesn't have enough tokens", async () => {
-      const assetId = 1;
-      const tokenAmount = 100;
+    it("should revert if the owner is not verified", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: true,
+        totalFragments: 100
+      };
 
-      await assetTokenization.issueToken(assetId, user1, tokenAmount, { from: owner });
-      
-      try {
-        await assetTokenization.transferToken(assetId, user1, user2, 200, { from: user1 });
-        assert.fail("Should not allow transfer more tokens than balance");
-      } catch (error) {
-        assert(error.toString().includes("revert"), "Expected revert error");
-      }
-    });
-  });
-
-  describe("Token Burning", () => {
-    it("should burn tokens correctly", async () => {
-      const assetId = 1;
-      const tokenAmount = 100;
-
-      await assetTokenization.issueToken(assetId, user1, tokenAmount, { from: owner });
-      await assetTokenization.burnToken(assetId, user1, 50, { from: user1 });
-      const balance = await assetTokenization.balanceOf(user1, assetId);
-
-      assert.equal(balance.toNumber(), 50, "User1 should have 50 tokens left after burning");
+      await expect(
+        AssetTokenization.tokenizeAsset(assets, params, addr1.address)
+      ).to.be.revertedWith("Owner must be verified");
     });
 
-    it("should fail burn if user doesn't have enough tokens", async () => {
-      const assetId = 1;
-      const tokenAmount = 100;
+    it("should revert if the asset type is invalid", async function () {
+      const params = {
+        assetType: "InvalidType",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: true,
+        totalFragments: 100
+      };
 
-      await assetTokenization.issueToken(assetId, user1, tokenAmount, { from: owner });
-      
-      try {
-        await assetTokenization.burnToken(assetId, user1, 200, { from: user1 });
-        assert.fail("Should not allow burning more tokens than balance");
-      } catch (error) {
-        assert(error.toString().includes("revert"), "Expected revert error");
-      }
+      await expect(
+        AssetTokenization.tokenizeAsset(assets, params, owner.address)
+      ).to.be.revertedWith("Invalid asset type");
     });
   });
 
-  describe("Token Attributes", () => {
-    it("should correctly set and get token attributes", async () => {
-      const assetId = 1;
-      const tokenAmount = 100;
-      const attributeName = "location";
-      const attributeValue = "New York";
+  describe("fragmentAsset", function () {
+    it("should fragment an existing non-fragmented asset", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: false,
+        totalFragments: 0
+      };
 
-      await assetTokenization.issueToken(assetId, user1, tokenAmount, { from: owner });
-      await assetTokenization.setTokenAttribute(assetId, attributeName, attributeValue, { from: owner });
-      const storedValue = await assetTokenization.getTokenAttribute(assetId, attributeName);
+      const assetId = await AssetTokenization.tokenizeAsset(assets, params, owner.address);
+      await AssetTokenization.fragmentAsset(assets, assetId, 100);
 
-      assert.equal(storedValue, attributeValue, "Token attribute should be correctly set and retrieved");
+      expect(assets[assetId].isFragmented).to.be.true;
+      expect(assets[assetId].totalFragments).to.equal(100);
+      expect(assets[assetId].fragmentBalances[owner.address]).to.equal(100);
     });
 
-    it("should fail setting attributes by non-owner", async () => {
+    it("should emit AssetFragmented event", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: false,
+        totalFragments: 0
+      };
+
+      const assetId = await AssetTokenization.tokenizeAsset(assets, params, owner.address);
+
+      await expect(AssetTokenization.fragmentAsset(assets, assetId, 100))
+        .to.emit(AssetTokenization, "AssetFragmented")
+        .withArgs(assetId, 100);
+    });
+
+    it("should revert if the asset is already fragmented", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: true,
+        totalFragments: 100
+      };
+
+      const assetId = await AssetTokenization.tokenizeAsset(assets, params, owner.address);
+
+      await expect(AssetTokenization.fragmentAsset(assets, assetId, 100)).to.be.revertedWith("Asset is already fragmented");
+    });
+
+    it("should revert if total fragments is zero", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: false,
+        totalFragments: 0
+      };
+
+      const assetId = await AssetTokenization.tokenizeAsset(assets, params, owner.address);
+
+      await expect(AssetTokenization.fragmentAsset(assets, assetId, 0)).to.be.revertedWith("Total fragments must be greater than zero");
+    });
+  });
+
+  describe("transferFragments", function () {
+    it("should transfer fragments from one address to another", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: true,
+        totalFragments: 100
+      };
+
+      const assetId = await AssetTokenization.tokenizeAsset(assets, params, owner.address);
+      await AssetTokenization.transferFragments(assets, assetId, owner.address, addr1.address, 50);
+
+      expect(assets[assetId].fragmentBalances[owner.address]).to.equal(50);
+      expect(assets[assetId].fragmentBalances[addr1.address]).to.equal(50);
+    });
+
+    it("should emit FragmentTransferred event", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: true,
+        totalFragments: 100
+      };
+
+      const assetId = await AssetTokenization.tokenizeAsset(assets, params, owner.address);
+
+      await expect(AssetTokenization.transferFragments(assets, assetId, owner.address, addr1.address, 50))
+        .to.emit(AssetTokenization, "FragmentTransferred")
+        .withArgs(assetId, owner.address, addr1.address, 50);
+    });
+
+    it("should revert if asset is not fragmented", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: false,
+        totalFragments: 0
+      };
+
+      const assetId = await AssetTokenization.tokenizeAsset(assets, params, owner.address);
+
+      await expect(AssetTokenization.transferFragments(assets, assetId, owner.address, addr1.address, 50)).to.be.revertedWith("Asset is not fragmented");
+    });
+
+    it("should revert if sender has insufficient fragment balance", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: true,
+        totalFragments: 100
+      };
+
+      const assetId = await AssetTokenization.tokenizeAsset(assets, params, owner.address);
+
+      await expect(AssetTokenization.transferFragments(assets, assetId, owner.address, addr1.address, 150)).to.be.revertedWith("Insufficient fragment balance");
+    });
+  });
+
+  describe("updateAssetValue", function () {
+    it("should update the value of an asset", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: true,
+        totalFragments: 100
+      };
+
+      const assetId = await AssetTokenization.tokenizeAsset(assets, params, owner.address);
+      const newValue = ethers.utils.parseEther("2000");
+
+      await AssetTokenization.updateAssetValue(assets, assetId, newValue);
+
+      expect(assets[assetId].value).to.equal(newValue);
+    });
+
+    it("should emit AssetValueUpdated event", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: true,
+        totalFragments: 100
+      };
+
+      const assetId = await AssetTokenization.tokenizeAsset(assets, params, owner.address);
+      const newValue = ethers.utils.parseEther("2000");
+
+      await expect(AssetTokenization.updateAssetValue(assets, assetId, newValue))
+        .to.emit(AssetTokenization, "AssetValueUpdated")
+        .withArgs(assetId, newValue);
+    });
+
+    it("should revert if asset does not exist", async function () {
       const assetId = 1;
-      const tokenAmount = 100;
-      const attributeName = "location";
-      const attributeValue = "New York";
+      const newValue = ethers.utils.parseEther("2000");
 
-      await assetTokenization.issueToken(assetId, user1, tokenAmount, { from: owner });
+      await expect(AssetTokenization.updateAssetValue(assets, assetId, newValue)).to.be.revertedWith("Asset does not exist");
+    });
+  });
 
-      try {
-        await assetTokenization.setTokenAttribute(assetId, attributeName, attributeValue, { from: user1 });
-        assert.fail("Non-owner should not be able to set token attributes");
-      } catch (error) {
-        assert(error.toString().includes("revert"), "Expected revert error");
-      }
+  describe("getFragmentBalance", function () {
+    it("should return the correct fragment balance", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: true,
+        totalFragments: 100
+      };
+
+      const assetId = await AssetTokenization.tokenizeAsset(assets, params, owner.address);
+
+      expect(await AssetTokenization.getFragmentBalance(assets, assetId, owner.address)).to.equal(100);
+    });
+
+    it("should revert if asset is not fragmented", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: false,
+        totalFragments: 0
+      };
+
+      const assetId = await AssetTokenization.tokenizeAsset(assets, params, owner.address);
+
+      await expect(AssetTokenization.getFragmentBalance(assets, assetId, owner.address)).to.be.revertedWith("Asset is not fragmented");
+    });
+  });
+
+  describe("calculateFragmentValue", function () {
+    it("should calculate the correct fragment value", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: true,
+        totalFragments: 100
+      };
+
+      const assetId = await AssetTokenization.tokenizeAsset(assets, params, owner.address);
+      const fragmentCount = 50;
+      const expectedValue = ethers.utils.parseEther("500");
+
+      expect(await AssetTokenization.calculateFragmentValue(assets, assetId, fragmentCount)).to.equal(expectedValue);
+    });
+
+    it("should revert if asset is not fragmented", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: false,
+        totalFragments: 0
+      };
+
+      const assetId = await AssetTokenization.tokenizeAsset(assets, params, owner.address);
+      const fragmentCount = 50;
+
+      await expect(AssetTokenization.calculateFragmentValue(assets, assetId, fragmentCount)).to.be.revertedWith("Asset is not fragmented");
+    });
+
+    it("should revert if fragment count exceeds total fragments", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: true,
+        totalFragments: 100
+      };
+
+      const assetId = await AssetTokenization.tokenizeAsset(assets, params, owner.address);
+      const fragmentCount = 150;
+
+      await expect(AssetTokenization.calculateFragmentValue(assets, assetId, fragmentCount)).to.be.revertedWith("Fragment count exceeds total fragments");
+    });
+  });
+
+  describe("isAssetOwner", function () {
+    it("should return true if the address is the owner of the asset", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: true,
+        totalFragments: 100
+      };
+
+      const assetId = await AssetTokenization.tokenizeAsset(assets, params, owner.address);
+
+      expect(await AssetTokenization.isAssetOwner(assets, assetId, owner.address)).to.be.true;
+    });
+
+    it("should return false if the address is not the owner of the asset", async function () {
+      const params = {
+        assetType: "Real Estate",
+        initialValue: ethers.utils.parseEther("1000"),
+        isFragmented: true,
+        totalFragments: 100
+      };
+
+      const assetId = await AssetTokenization.tokenizeAsset(assets, params, owner.address);
+
+      expect(await AssetTokenization.isAssetOwner(assets, assetId, addr1.address)).to.be.false;
     });
   });
 });

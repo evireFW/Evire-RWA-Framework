@@ -1,88 +1,203 @@
-const OwnershipTransfer = artifacts.require("OwnershipTransfer");
 const { expect } = require("chai");
-const { BN, expectEvent, expectRevert } = require("@openzeppelin/test-helpers");
+const { ethers } = require("hardhat");
 
-contract("OwnershipTransfer", (accounts) => {
-  const [owner, newOwner, unauthorized] = accounts;
+describe("OwnershipTransfer", function () {
+  let OwnershipTransfer;
+  let owner, addr1, addr2;
+  let transferData;
+  const assetId = 1;
+  const complianceHash = ethers.utils.formatBytes32String("compliance");
+  const legalDocumentHash = ethers.utils.formatBytes32String("legal");
 
-  let ownershipTransferInstance;
+  beforeEach(async function () {
+    [owner, addr1, addr2] = await ethers.getSigners();
 
-  beforeEach(async () => {
-    ownershipTransferInstance = await OwnershipTransfer.new({ from: owner });
+    const OwnershipTransferFactory = await ethers.getContractFactory("OwnershipTransferMock");
+    OwnershipTransfer = await OwnershipTransferFactory.deploy();
+    await OwnershipTransfer.deployed();
+
+    transferData = {
+      from: owner.address,
+      to: addr1.address,
+      assetId: assetId,
+      timestamp: 0,
+      status: 0,
+      complianceHash: complianceHash,
+      legalDocumentHash: legalDocumentHash
+    };
   });
 
-  describe("Initial State", () => {
-    it("should set the initial owner correctly", async () => {
-      const currentOwner = await ownershipTransferInstance.owner();
-      expect(currentOwner).to.equal(owner);
+  describe("initiateTransfer", function () {
+    it("should initiate a transfer", async function () {
+      const transferId = await OwnershipTransfer.initiateTransfer(transferData, owner.address, addr1.address, assetId, complianceHash, legalDocumentHash);
+
+      expect(transferData.from).to.equal(owner.address);
+      expect(transferData.to).to.equal(addr1.address);
+      expect(transferData.assetId).to.equal(assetId);
+      expect(transferData.status).to.equal(0);
+      expect(transferData.complianceHash).to.equal(complianceHash);
+      expect(transferData.legalDocumentHash).to.equal(legalDocumentHash);
+
+      const expectedTransferId = ethers.BigNumber.from(ethers.utils.keccak256(ethers.utils.defaultAbiCoder.encode(
+        ['address', 'address', 'uint256', 'uint256'],
+        [owner.address, addr1.address, assetId, transferData.timestamp]
+      )));
+      expect(transferId).to.equal(expectedTransferId);
+    });
+
+    it("should emit TransferInitiated event", async function () {
+      await expect(OwnershipTransfer.initiateTransfer(transferData, owner.address, addr1.address, assetId, complianceHash, legalDocumentHash))
+        .to.emit(OwnershipTransfer, "TransferInitiated")
+        .withArgs(ethers.BigNumber.from(ethers.utils.keccak256(ethers.utils.defaultAbiCoder.encode(
+          ['address', 'address', 'uint256', 'uint256'],
+          [owner.address, addr1.address, assetId, transferData.timestamp]
+        ))), owner.address, addr1.address, assetId);
+    });
+
+    it("should revert if transferring to self", async function () {
+      await expect(OwnershipTransfer.initiateTransfer(transferData, owner.address, owner.address, assetId, complianceHash, legalDocumentHash))
+        .to.be.revertedWith("Cannot transfer to self");
+    });
+
+    it("should revert if from or to address is zero", async function () {
+      await expect(OwnershipTransfer.initiateTransfer(transferData, ethers.constants.AddressZero, addr1.address, assetId, complianceHash, legalDocumentHash))
+        .to.be.revertedWith("Invalid addresses");
+
+      await expect(OwnershipTransfer.initiateTransfer(transferData, owner.address, ethers.constants.AddressZero, assetId, complianceHash, legalDocumentHash))
+        .to.be.revertedWith("Invalid addresses");
     });
   });
 
-  describe("Transfer Ownership", () => {
-    it("should transfer ownership to the new owner", async () => {
-      const receipt = await ownershipTransferInstance.transferOwnership(newOwner, { from: owner });
-      expectEvent(receipt, "OwnershipTransferred", {
-        previousOwner: owner,
-        newOwner: newOwner,
-      });
-
-      const currentOwner = await ownershipTransferInstance.owner();
-      expect(currentOwner).to.equal(newOwner);
+  describe("approveTransfer", function () {
+    beforeEach(async function () {
+      await OwnershipTransfer.initiateTransfer(transferData, owner.address, addr1.address, assetId, complianceHash, legalDocumentHash);
     });
 
-    it("should not allow unauthorized accounts to transfer ownership", async () => {
-      await expectRevert(
-        ownershipTransferInstance.transferOwnership(newOwner, { from: unauthorized }),
-        "Ownable: caller is not the owner"
-      );
+    it("should approve a transfer", async function () {
+      await OwnershipTransfer.approveTransfer(transferData, assetId);
+
+      expect(transferData.status).to.equal(1); // Approved status
     });
 
-    it("should revert if new owner is the zero address", async () => {
-      await expectRevert(
-        ownershipTransferInstance.transferOwnership("0x0000000000000000000000000000000000000000", { from: owner }),
-        "Ownable: new owner is the zero address"
-      );
+    it("should emit TransferApproved event", async function () {
+      await expect(OwnershipTransfer.approveTransfer(transferData, assetId))
+        .to.emit(OwnershipTransfer, "TransferApproved")
+        .withArgs(assetId);
+    });
+
+    it("should revert if transfer is not in pending state", async function () {
+      transferData.status = 1; // Set status to Approved
+      await expect(OwnershipTransfer.approveTransfer(transferData, assetId)).to.be.revertedWith("Transfer not in pending state");
     });
   });
 
-  describe("Ownership Restrictions", () => {
-    it("should allow only the current owner to call restricted functions", async () => {
-      // Example of a restricted function call, replace `restrictedFunction` with an actual restricted function in OwnershipTransfer
-      await expectRevert(
-        ownershipTransferInstance.restrictedFunction({ from: unauthorized }),
-        "Ownable: caller is not the owner"
-      );
+  describe("rejectTransfer", function () {
+    beforeEach(async function () {
+      await OwnershipTransfer.initiateTransfer(transferData, owner.address, addr1.address, assetId, complianceHash, legalDocumentHash);
+    });
 
-      const result = await ownershipTransferInstance.restrictedFunction({ from: owner });
-      expect(result).to.be.true;
+    it("should reject a transfer", async function () {
+      await OwnershipTransfer.rejectTransfer(transferData, assetId, "Invalid compliance");
+
+      expect(transferData.status).to.equal(2); // Rejected status
+    });
+
+    it("should emit TransferRejected event", async function () {
+      await expect(OwnershipTransfer.rejectTransfer(transferData, assetId, "Invalid compliance"))
+        .to.emit(OwnershipTransfer, "TransferRejected")
+        .withArgs(assetId, "Invalid compliance");
+    });
+
+    it("should revert if transfer is not in pending state", async function () {
+      transferData.status = 1; // Set status to Approved
+      await expect(OwnershipTransfer.rejectTransfer(transferData, assetId, "Invalid compliance")).to.be.revertedWith("Transfer not in pending state");
     });
   });
 
-  describe("Ownership Transfer Events", () => {
-    it("should emit an event on ownership transfer", async () => {
-      const receipt = await ownershipTransferInstance.transferOwnership(newOwner, { from: owner });
-      expectEvent(receipt, "OwnershipTransferred", {
-        previousOwner: owner,
-        newOwner: newOwner,
-      });
+  describe("completeTransfer", function () {
+    beforeEach(async function () {
+      await OwnershipTransfer.initiateTransfer(transferData, owner.address, addr1.address, assetId, complianceHash, legalDocumentHash);
+      await OwnershipTransfer.approveTransfer(transferData, assetId);
+    });
+
+    it("should complete a transfer", async function () {
+      await OwnershipTransfer.completeTransfer(transferData, assetId);
+
+      expect(transferData.status).to.equal(3); // Completed status
+    });
+
+    it("should emit TransferCompleted event", async function () {
+      await expect(OwnershipTransfer.completeTransfer(transferData, assetId))
+        .to.emit(OwnershipTransfer, "TransferCompleted")
+        .withArgs(assetId);
+    });
+
+    it("should revert if transfer is not approved", async function () {
+      transferData.status = 0; // Set status to Pending
+      await expect(OwnershipTransfer.completeTransfer(transferData, assetId)).to.be.revertedWith("Transfer not approved");
     });
   });
 
-  describe("Edge Cases", () => {
-    it("should revert if transferring ownership to the same owner", async () => {
-      await expectRevert(
-        ownershipTransferInstance.transferOwnership(owner, { from: owner }),
-        "Ownable: new owner is the current owner"
-      );
+  describe("cancelTransfer", function () {
+    beforeEach(async function () {
+      await OwnershipTransfer.initiateTransfer(transferData, owner.address, addr1.address, assetId, complianceHash, legalDocumentHash);
     });
 
-    it("should handle multiple ownership transfers correctly", async () => {
-      await ownershipTransferInstance.transferOwnership(newOwner, { from: owner });
-      const secondNewOwner = accounts[2];
-      await ownershipTransferInstance.transferOwnership(secondNewOwner, { from: newOwner });
+    it("should cancel a transfer", async function () {
+      await OwnershipTransfer.cancelTransfer(transferData, assetId);
 
-      const currentOwner = await ownershipTransferInstance.owner();
-      expect(currentOwner).to.equal(secondNewOwner);
+      expect(transferData.status).to.equal(4); // Cancelled status
+    });
+
+    it("should emit TransferCancelled event", async function () {
+      await expect(OwnershipTransfer.cancelTransfer(transferData, assetId))
+        .to.emit(OwnershipTransfer, "TransferCancelled")
+        .withArgs(assetId);
+    });
+
+    it("should revert if transfer is not in pending state", async function () {
+      transferData.status = 1; // Set status to Approved
+      await expect(OwnershipTransfer.cancelTransfer(transferData, assetId)).to.be.revertedWith("Transfer not in pending state");
+    });
+  });
+
+  describe("isValidTransfer", function () {
+    beforeEach(async function () {
+      await OwnershipTransfer.initiateTransfer(transferData, owner.address, addr1.address, assetId, complianceHash, legalDocumentHash);
+      await OwnershipTransfer.approveTransfer(transferData, assetId);
+    });
+
+    it("should return true for a valid transfer", async function () {
+      expect(await OwnershipTransfer.isValidTransfer(transferData)).to.be.true;
+    });
+
+    it("should return false for an invalid transfer", async function () {
+      transferData.status = 0; // Set status to Pending
+      expect(await OwnershipTransfer.isValidTransfer(transferData)).to.be.false;
+    });
+  });
+
+  describe("getTransferStatus", function () {
+    beforeEach(async function () {
+      await OwnershipTransfer.initiateTransfer(transferData, owner.address, addr1.address, assetId, complianceHash, legalDocumentHash);
+    });
+
+    it("should return the correct transfer status", async function () {
+      expect(await OwnershipTransfer.getTransferStatus(transferData)).to.equal(0); // Pending status
+
+      transferData.status = 1; // Set status to Approved
+      expect(await OwnershipTransfer.getTransferStatus(transferData)).to.equal(1); // Approved status
+    });
+  });
+
+  describe("getTimeElapsed", function () {
+    beforeEach(async function () {
+      await OwnershipTransfer.initiateTransfer(transferData, owner.address, addr1.address, assetId, complianceHash, legalDocumentHash);
+    });
+
+    it("should return the time elapsed since the transfer was initiated", async function () {
+      const timeElapsed = await OwnershipTransfer.getTimeElapsed(transferData);
+      expect(timeElapsed).to.be.gte(0);
     });
   });
 });

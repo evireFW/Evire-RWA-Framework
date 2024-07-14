@@ -1,60 +1,237 @@
-const AuditTrail = artifacts.require("AuditTrail");
+const { expect } = require("chai");
+const { ethers } = require("hardhat");
 
-const { expect } = require('chai');
+describe("AuditTrail", function () {
+  let AuditTrail;
+  let auditTrailStorage;
+  let owner, addr1, addr2;
 
-contract('AuditTrail', (accounts) => {
-  const [deployer, user1, user2] = accounts;
+  beforeEach(async function () {
+    [owner, addr1, addr2] = await ethers.getSigners();
 
-  let auditTrail;
+    const AuditTrailFactory = await ethers.getContractFactory("AuditTrail");
+    AuditTrail = await AuditTrailFactory.deploy();
+    await AuditTrail.deployed();
 
-  before(async () => {
-    auditTrail = await AuditTrail.deployed();
+    auditTrailStorage = {
+      entries: {},
+      entryCount: ethers.BigNumber.from(0),
+      validActions: {},
+      authorizedAuditors: {}
+    };
   });
 
-  describe('AuditTrail Contract', () => {
-    it('should deploy successfully', async () => {
-      expect(auditTrail.address).to.not.be.oneOf([0x0, '', null, undefined]);
+  describe("addEntry", function () {
+    beforeEach(async function () {
+      await AuditTrail.addValidAction(auditTrailStorage, ethers.utils.formatBytes32String("CREATE"));
+      await AuditTrail.authorizeAuditor(auditTrailStorage, owner.address);
     });
 
-    it('should create a new audit event', async () => {
-      const tx = await auditTrail.createAuditEvent('Asset Created', 'Asset ID: 123', { from: user1 });
-      expect(tx.logs[0].event).to.equal('AuditEventCreated');
+    it("should add a new audit entry", async function () {
+      const action = ethers.utils.formatBytes32String("CREATE");
+      const assetId = ethers.utils.formatBytes32String("ASSET123");
+      const additionalData = ethers.utils.toUtf8Bytes("Some additional data");
+
+      await AuditTrail.addEntry(auditTrailStorage, addr1.address, action, assetId, additionalData);
+
+      const entry = await AuditTrail.getEntry(auditTrailStorage, 1);
+      expect(entry.id).to.equal(1);
+      expect(entry.actor).to.equal(addr1.address);
+      expect(entry.action).to.equal(action);
+      expect(entry.assetId).to.equal(assetId);
+      expect(entry.additionalData).to.equal(additionalData);
     });
 
-    it('should store audit events correctly', async () => {
-      await auditTrail.createAuditEvent('Ownership Transferred', 'From User1 to User2', { from: user1 });
-      const eventCount = await auditTrail.getAuditEventCount();
-      expect(eventCount.toNumber()).to.equal(2);
+    it("should emit AuditEntryAdded event", async function () {
+      const action = ethers.utils.formatBytes32String("CREATE");
+      const assetId = ethers.utils.formatBytes32String("ASSET123");
+      const additionalData = ethers.utils.toUtf8Bytes("Some additional data");
+
+      await expect(AuditTrail.addEntry(auditTrailStorage, addr1.address, action, assetId, additionalData))
+        .to.emit(AuditTrail, "AuditEntryAdded")
+        .withArgs(1, addr1.address, action, assetId);
     });
 
-    it('should retrieve audit event details correctly', async () => {
-      const auditEvent = await auditTrail.getAuditEvent(0);
-      expect(auditEvent[0]).to.equal('Asset Created');
-      expect(auditEvent[1]).to.equal('Asset ID: 123');
-      expect(auditEvent[2]).to.equal(user1);
+    it("should revert if the action is invalid", async function () {
+      const action = ethers.utils.formatBytes32String("INVALID");
+      const assetId = ethers.utils.formatBytes32String("ASSET123");
+      const additionalData = ethers.utils.toUtf8Bytes("Some additional data");
+
+      await expect(AuditTrail.addEntry(auditTrailStorage, addr1.address, action, assetId, additionalData))
+        .to.be.revertedWith("AuditTrail: Invalid action");
     });
 
-    it('should not allow unauthorized users to create audit events', async () => {
-      try {
-        await auditTrail.createAuditEvent('Unauthorized Event', 'Should Fail', { from: user2 });
-        assert.fail('Expected throw not received');
-      } catch (error) {
-        assert(error.message.indexOf('revert') >= 0, 'Expected revert error not received');
-      }
+    it("should revert if the caller is not an authorized auditor", async function () {
+      await AuditTrail.deauthorizeAuditor(auditTrailStorage, owner.address);
+
+      const action = ethers.utils.formatBytes32String("CREATE");
+      const assetId = ethers.utils.formatBytes32String("ASSET123");
+      const additionalData = ethers.utils.toUtf8Bytes("Some additional data");
+
+      await expect(AuditTrail.addEntry(auditTrailStorage, addr1.address, action, assetId, additionalData))
+        .to.be.revertedWith("AuditTrail: Caller is not an authorized auditor");
+    });
+  });
+
+  describe("getEntry", function () {
+    beforeEach(async function () {
+      await AuditTrail.addValidAction(auditTrailStorage, ethers.utils.formatBytes32String("CREATE"));
+      await AuditTrail.authorizeAuditor(auditTrailStorage, owner.address);
+      await AuditTrail.addEntry(auditTrailStorage, addr1.address, ethers.utils.formatBytes32String("CREATE"), ethers.utils.formatBytes32String("ASSET123"), ethers.utils.toUtf8Bytes("Some additional data"));
     });
 
-    it('should return correct events for an address', async () => {
-      const user1Events = await auditTrail.getEventsByAddress(user1);
-      expect(user1Events.length).to.equal(2);
-
-      const user2Events = await auditTrail.getEventsByAddress(user2);
-      expect(user2Events.length).to.equal(0);
+    it("should return the correct audit entry", async function () {
+      const entry = await AuditTrail.getEntry(auditTrailStorage, 1);
+      expect(entry.id).to.equal(1);
+      expect(entry.actor).to.equal(addr1.address);
+      expect(entry.action).to.equal(ethers.utils.formatBytes32String("CREATE"));
+      expect(entry.assetId).to.equal(ethers.utils.formatBytes32String("ASSET123"));
     });
 
-    it('should correctly log events in chronological order', async () => {
-      const auditEvent1 = await auditTrail.getAuditEvent(0);
-      const auditEvent2 = await auditTrail.getAuditEvent(1);
-      expect(new Date(auditEvent1[3] * 1000)).to.be.below(new Date(auditEvent2[3] * 1000));
+    it("should revert if the entry ID is invalid", async function () {
+      await expect(AuditTrail.getEntry(auditTrailStorage, 2)).to.be.revertedWith("AuditTrail: Invalid entry ID");
+    });
+  });
+
+  describe("addValidAction", function () {
+    it("should add a new valid action", async function () {
+      const action = ethers.utils.formatBytes32String("UPDATE");
+      await AuditTrail.addValidAction(auditTrailStorage, action);
+      expect(await AuditTrail.isValidAction(auditTrailStorage, action)).to.be.true;
+    });
+
+    it("should emit ActionAdded event", async function () {
+      const action = ethers.utils.formatBytes32String("UPDATE");
+      await expect(AuditTrail.addValidAction(auditTrailStorage, action))
+        .to.emit(AuditTrail, "ActionAdded")
+        .withArgs(action);
+    });
+
+    it("should revert if the action already exists", async function () {
+      const action = ethers.utils.formatBytes32String("UPDATE");
+      await AuditTrail.addValidAction(auditTrailStorage, action);
+      await expect(AuditTrail.addValidAction(auditTrailStorage, action)).to.be.revertedWith("AuditTrail: Action already exists");
+    });
+  });
+
+  describe("removeValidAction", function () {
+    beforeEach(async function () {
+      await AuditTrail.addValidAction(auditTrailStorage, ethers.utils.formatBytes32String("DELETE"));
+    });
+
+    it("should remove a valid action", async function () {
+      const action = ethers.utils.formatBytes32String("DELETE");
+      await AuditTrail.removeValidAction(auditTrailStorage, action);
+      expect(await AuditTrail.isValidAction(auditTrailStorage, action)).to.be.false;
+    });
+
+    it("should emit ActionRemoved event", async function () {
+      const action = ethers.utils.formatBytes32String("DELETE");
+      await expect(AuditTrail.removeValidAction(auditTrailStorage, action))
+        .to.emit(AuditTrail, "ActionRemoved")
+        .withArgs(action);
+    });
+
+    it("should revert if the action does not exist", async function () {
+      const action = ethers.utils.formatBytes32String("NON_EXISTENT");
+      await expect(AuditTrail.removeValidAction(auditTrailStorage, action)).to.be.revertedWith("AuditTrail: Action does not exist");
+    });
+  });
+
+  describe("authorizeAuditor", function () {
+    it("should authorize a new auditor", async function () {
+      await AuditTrail.authorizeAuditor(auditTrailStorage, addr1.address);
+      expect(await AuditTrail.isAuthorizedAuditor(auditTrailStorage, addr1.address)).to.be.true;
+    });
+
+    it("should emit AuditorAuthorized event", async function () {
+      await expect(AuditTrail.authorizeAuditor(auditTrailStorage, addr1.address))
+        .to.emit(AuditTrail, "AuditorAuthorized")
+        .withArgs(addr1.address);
+    });
+
+    it("should revert if the auditor is already authorized", async function () {
+      await AuditTrail.authorizeAuditor(auditTrailStorage, addr1.address);
+      await expect(AuditTrail.authorizeAuditor(auditTrailStorage, addr1.address)).to.be.revertedWith("AuditTrail: Auditor already authorized");
+    });
+  });
+
+  describe("deauthorizeAuditor", function () {
+    beforeEach(async function () {
+      await AuditTrail.authorizeAuditor(auditTrailStorage, addr1.address);
+    });
+
+    it("should deauthorize an existing auditor", async function () {
+      await AuditTrail.deauthorizeAuditor(auditTrailStorage, addr1.address);
+      expect(await AuditTrail.isAuthorizedAuditor(auditTrailStorage, addr1.address)).to.be.false;
+    });
+
+    it("should emit AuditorDeauthorized event", async function () {
+      await expect(AuditTrail.deauthorizeAuditor(auditTrailStorage, addr1.address))
+        .to.emit(AuditTrail, "AuditorDeauthorized")
+        .withArgs(addr1.address);
+    });
+
+    it("should revert if the auditor is not authorized", async function () {
+      await AuditTrail.deauthorizeAuditor(auditTrailStorage, addr1.address);
+      await expect(AuditTrail.deauthorizeAuditor(auditTrailStorage, addr1.address)).to.be.revertedWith("AuditTrail: Auditor not authorized");
+    });
+  });
+
+  describe("isValidAction", function () {
+    it("should return true for a valid action", async function () {
+      const action = ethers.utils.formatBytes32String("VALID_ACTION");
+      await AuditTrail.addValidAction(auditTrailStorage, action);
+      expect(await AuditTrail.isValidAction(auditTrailStorage, action)).to.be.true;
+    });
+
+    it("should return false for an invalid action", async function () {
+      const action = ethers.utils.formatBytes32String("INVALID_ACTION");
+      expect(await AuditTrail.isValidAction(auditTrailStorage, action)).to.be.false;
+    });
+  });
+
+  describe("isAuthorizedAuditor", function () {
+    it("should return true for an authorized auditor", async function () {
+      await AuditTrail.authorizeAuditor(auditTrailStorage, addr1.address);
+      expect(await AuditTrail.isAuthorizedAuditor(auditTrailStorage, addr1.address)).to.be.true;
+    });
+
+    it("should return false for a non-authorized auditor", async function () {
+      expect(await AuditTrail.isAuthorizedAuditor(auditTrailStorage, addr1.address)).to.be.false;
+    });
+  });
+
+  describe("getEntryCount", function () {
+    it("should return the correct number of entries", async function () {
+      await AuditTrail.addValidAction(auditTrailStorage, ethers.utils.formatBytes32String("CREATE"));
+      await AuditTrail.authorizeAuditor(auditTrailStorage, owner.address);
+      await AuditTrail.addEntry(auditTrailStorage, addr1.address, ethers.utils.formatBytes32String("CREATE"), ethers.utils.formatBytes32String("ASSET123"), ethers.utils.toUtf8Bytes("Some additional data"));
+      expect(await AuditTrail.getEntryCount(auditTrailStorage)).to.equal(1);
+    });
+  });
+
+  describe("getEntryRange", function () {
+    beforeEach(async function () {
+      await AuditTrail.addValidAction(auditTrailStorage, ethers.utils.formatBytes32String("CREATE"));
+      await AuditTrail.authorizeAuditor(auditTrailStorage, owner.address);
+      await AuditTrail.addEntry(auditTrailStorage, addr1.address, ethers.utils.formatBytes32String("CREATE"), ethers.utils.formatBytes32String("ASSET123"), ethers.utils.toUtf8Bytes("Some additional data"));
+      await AuditTrail.addEntry(auditTrailStorage, addr2.address, ethers.utils.formatBytes32String("CREATE"), ethers.utils.formatBytes32String("ASSET456"), ethers.utils.toUtf8Bytes("More data"));
+    });
+
+    it("should return the correct range of entries", async function () {
+      const entries = await AuditTrail.getEntryRange(auditTrailStorage, 1, 2);
+      expect(entries.length).to.equal(2);
+      expect(entries[0].id).to.equal(1);
+      expect(entries[1].id).to.equal(2);
+    });
+
+    it("should revert if startId is invalid", async function () {
+      await expect(AuditTrail.getEntryRange(auditTrailStorage, 0, 2)).to.be.revertedWith("AuditTrail: Invalid start ID");
+    });
+
+    it("should revert if endId is invalid", async function () {
+      await expect(AuditTrail.getEntryRange(auditTrailStorage, 1, 3)).to.be.revertedWith("AuditTrail: Invalid end ID");
     });
   });
 });

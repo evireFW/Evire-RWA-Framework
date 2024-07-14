@@ -1,97 +1,170 @@
-const AssetValuation = artifacts.require("AssetValuation");
+const { expect } = require("chai");
+const { ethers } = require("hardhat");
 
-contract("AssetValuation", (accounts) => {
-  let assetValuation;
+describe("AssetValuation", function () {
+  let AssetValuation, assetValuation;
+  let owner, addr1;
+  let mockOracle;
 
-  before(async () => {
-    assetValuation = await AssetValuation.deployed();
+  beforeEach(async function () {
+    [owner, addr1] = await ethers.getSigners();
+
+    const MockOracle = await ethers.getContractFactory("MockOracle");
+    mockOracle = await MockOracle.deploy();
+    await mockOracle.deployed();
+
+    const AssetValuationFactory = await ethers.getContractFactory("AssetValuation");
+    assetValuation = await AssetValuationFactory.deploy();
+    await assetValuation.deployed();
   });
 
-  describe("Asset Valuation", () => {
-    it("should correctly initialize the contract", async () => {
-      assert(assetValuation.address !== "");
+  describe("calculateAssetValue", function () {
+    it("should calculate the value of a real estate asset", async function () {
+      const assetData = {
+        purchasePrice: ethers.utils.parseEther("1000"),
+        lastValuation: ethers.utils.parseEther("1000"),
+        lastValuationTimestamp: (await ethers.provider.getBlock('latest')).timestamp,
+        assetType: "real_estate",
+        depreciationRate: 0,
+        oracleAddress: mockOracle.address
+      };
+
+      await mockOracle.setLatestAnswer(ethers.utils.parseEther("1050"));
+      const value = await assetValuation.calculateAssetValue(assetData);
+      expect(value).to.be.closeTo(ethers.utils.parseEther("1102.5"), ethers.utils.parseEther("0.01"));
     });
 
-    it("should return correct valuation for a given asset type and parameters", async () => {
-      // Example values for the test
-      const assetType = web3.utils.keccak256("RealEstate");
-      const assetParameters = web3.utils.keccak256("Location,Size,Condition");
+    it("should calculate the value of a vehicle asset", async function () {
+      const assetData = {
+        purchasePrice: ethers.utils.parseEther("1000"),
+        lastValuation: ethers.utils.parseEther("1000"),
+        lastValuationTimestamp: (await ethers.provider.getBlock('latest')).timestamp - 365 * 24 * 60 * 60,
+        assetType: "vehicle",
+        depreciationRate: 10,
+        oracleAddress: mockOracle.address
+      };
 
-      // Call the valuation function
-      const valuation = await assetValuation.calculateValuation(assetType, assetParameters, { from: accounts[0] });
-      
-      // Assuming the valuation should be 100000 for this example
-      assert.equal(valuation.toNumber(), 100000, "Valuation does not match expected value");
+      await mockOracle.setLatestAnswer(ethers.utils.parseEther("950"));
+      const value = await assetValuation.calculateAssetValue(assetData);
+      expect(value).to.be.closeTo(ethers.utils.parseEther("855"), ethers.utils.parseEther("0.01"));
     });
 
-    it("should handle multiple asset types and return correct valuations", async () => {
-      const assetTypes = [
-        web3.utils.keccak256("RealEstate"),
-        web3.utils.keccak256("Artwork"),
-        web3.utils.keccak256("Vehicle")
-      ];
-      const assetParameters = [
-        web3.utils.keccak256("Location,Size,Condition"),
-        web3.utils.keccak256("Artist,Year,Condition"),
-        web3.utils.keccak256("Make,Model,Year,Condition")
-      ];
+    it("should calculate the value of an artwork asset", async function () {
+      const assetData = {
+        purchasePrice: ethers.utils.parseEther("1000"),
+        lastValuation: ethers.utils.parseEther("1000"),
+        lastValuationTimestamp: (await ethers.provider.getBlock('latest')).timestamp - 365 * 24 * 60 * 60,
+        assetType: "artwork",
+        depreciationRate: 0,
+        oracleAddress: mockOracle.address
+      };
 
-      const expectedValuations = [100000, 50000, 20000];
-
-      for (let i = 0; i < assetTypes.length; i++) {
-        const valuation = await assetValuation.calculateValuation(assetTypes[i], assetParameters[i], { from: accounts[0] });
-        assert.equal(valuation.toNumber(), expectedValuations[i], `Valuation for ${assetTypes[i]} does not match expected value`);
-      }
+      await mockOracle.setLatestAnswer(ethers.utils.parseEther("1100"));
+      const value = await assetValuation.calculateAssetValue(assetData);
+      expect(value).to.be.closeTo(ethers.utils.parseEther("1210"), ethers.utils.parseEther("0.01"));
     });
 
-    it("should revert if the asset type is invalid", async () => {
-      const invalidAssetType = web3.utils.keccak256("InvalidType");
-      const assetParameters = web3.utils.keccak256("Parameter1,Parameter2");
+    it("should revert for an invalid asset type", async function () {
+      const assetData = {
+        purchasePrice: ethers.utils.parseEther("1000"),
+        lastValuation: ethers.utils.parseEther("1000"),
+        lastValuationTimestamp: (await ethers.provider.getBlock('latest')).timestamp,
+        assetType: "invalid_type",
+        depreciationRate: 0,
+        oracleAddress: mockOracle.address
+      };
 
-      try {
-        await assetValuation.calculateValuation(invalidAssetType, assetParameters, { from: accounts[0] });
-        assert.fail("Expected revert not received");
-      } catch (error) {
-        assert(error.message.includes("revert"), "Expected revert, got " + error.message);
-      }
-    });
-
-    it("should revert if the asset parameters are invalid", async () => {
-      const assetType = web3.utils.keccak256("RealEstate");
-      const invalidParameters = web3.utils.keccak256("InvalidParameter");
-
-      try {
-        await assetValuation.calculateValuation(assetType, invalidParameters, { from: accounts[0] });
-        assert.fail("Expected revert not received");
-      } catch (error) {
-        assert(error.message.includes("revert"), "Expected revert, got " + error.message);
-      }
-    });
-  });
-
-  describe("Event Emissions", () => {
-    it("should emit ValuationCalculated event", async () => {
-      const assetType = web3.utils.keccak256("RealEstate");
-      const assetParameters = web3.utils.keccak256("Location,Size,Condition");
-
-      const result = await assetValuation.calculateValuation(assetType, assetParameters, { from: accounts[0] });
-
-      const log = result.logs[0];
-      assert.equal(log.event, "ValuationCalculated", "ValuationCalculated event not emitted");
-      assert.equal(log.args.assetType, assetType, "Asset type in event log does not match");
-      assert.equal(log.args.valuation.toNumber(), 100000, "Valuation in event log does not match expected value");
+      await expect(assetValuation.calculateAssetValue(assetData)).to.be.revertedWith("InvalidAssetType");
     });
   });
 
-  describe("Edge Cases", () => {
-    it("should handle large input values correctly", async () => {
-      const assetType = web3.utils.keccak256("RealEstate");
-      const largeParameters = web3.utils.keccak256("VeryLargeParameterValues");
+  describe("updateDepreciationRate", function () {
+    it("should update the depreciation rate for an asset", async function () {
+      const assetData = {
+        purchasePrice: ethers.utils.parseEther("1000"),
+        lastValuation: ethers.utils.parseEther("1000"),
+        lastValuationTimestamp: (await ethers.provider.getBlock('latest')).timestamp,
+        assetType: "vehicle",
+        depreciationRate: 10,
+        oracleAddress: mockOracle.address
+      };
 
-      const valuation = await assetValuation.calculateValuation(assetType, largeParameters, { from: accounts[0] });
+      await assetValuation.updateDepreciationRate(assetData, 15);
+      expect(assetData.depreciationRate).to.equal(15);
+    });
 
-      // Assuming the valuation should be 1000000 for this example
-      assert.equal(valuation.toNumber(), 1000000, "Valuation for large inputs does not match expected value");
+    it("should emit DepreciationRateUpdated event", async function () {
+      const assetData = {
+        purchasePrice: ethers.utils.parseEther("1000"),
+        lastValuation: ethers.utils.parseEther("1000"),
+        lastValuationTimestamp: (await ethers.provider.getBlock('latest')).timestamp,
+        assetType: "vehicle",
+        depreciationRate: 10,
+        oracleAddress: mockOracle.address
+      };
+
+      await expect(assetValuation.updateDepreciationRate(assetData, 15))
+        .to.emit(assetValuation, "DepreciationRateUpdated")
+        .withArgs(ethers.utils.id(JSON.stringify(assetData)), 15);
+    });
+
+    it("should revert if the new depreciation rate is greater than 100", async function () {
+      const assetData = {
+        purchasePrice: ethers.utils.parseEther("1000"),
+        lastValuation: ethers.utils.parseEther("1000"),
+        lastValuationTimestamp: (await ethers.provider.getBlock('latest')).timestamp,
+        assetType: "vehicle",
+        depreciationRate: 10,
+        oracleAddress: mockOracle.address
+      };
+
+      await expect(assetValuation.updateDepreciationRate(assetData, 110)).to.be.revertedWith("Depreciation rate must be between 0 and 100");
+    });
+  });
+
+  describe("updateOracleAddress", function () {
+    it("should update the oracle address for an asset", async function () {
+      const assetData = {
+        purchasePrice: ethers.utils.parseEther("1000"),
+        lastValuation: ethers.utils.parseEther("1000"),
+        lastValuationTimestamp: (await ethers.provider.getBlock('latest')).timestamp,
+        assetType: "real_estate",
+        depreciationRate: 0,
+        oracleAddress: mockOracle.address
+      };
+
+      const newOracleAddress = ethers.Wallet.createRandom().address;
+      await assetValuation.updateOracleAddress(assetData, newOracleAddress);
+      expect(assetData.oracleAddress).to.equal(newOracleAddress);
+    });
+
+    it("should emit OracleAddressUpdated event", async function () {
+      const assetData = {
+        purchasePrice: ethers.utils.parseEther("1000"),
+        lastValuation: ethers.utils.parseEther("1000"),
+        lastValuationTimestamp: (await ethers.provider.getBlock('latest')).timestamp,
+        assetType: "real_estate",
+        depreciationRate: 0,
+        oracleAddress: mockOracle.address
+      };
+
+      const newOracleAddress = ethers.Wallet.createRandom().address;
+      await expect(assetValuation.updateOracleAddress(assetData, newOracleAddress))
+        .to.emit(assetValuation, "OracleAddressUpdated")
+        .withArgs(ethers.utils.id(JSON.stringify(assetData)), newOracleAddress);
+    });
+
+    it("should revert if the new oracle address is the zero address", async function () {
+      const assetData = {
+        purchasePrice: ethers.utils.parseEther("1000"),
+        lastValuation: ethers.utils.parseEther("1000"),
+        lastValuationTimestamp: (await ethers.provider.getBlock('latest')).timestamp,
+        assetType: "real_estate",
+        depreciationRate: 0,
+        oracleAddress: mockOracle.address
+      };
+
+      await expect(assetValuation.updateOracleAddress(assetData, ethers.constants.AddressZero)).to.be.revertedWith("InvalidOracleAddress");
     });
   });
 });
