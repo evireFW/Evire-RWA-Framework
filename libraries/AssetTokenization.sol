@@ -3,8 +3,6 @@ pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "./DataVerification.sol";
 import "./ComplianceChecks.sol";
 
@@ -13,8 +11,6 @@ import "./ComplianceChecks.sol";
  * @dev Library for tokenizing real-world assets (RWA) on the blockchain
  */
 library AssetTokenization {
-    using SafeMath for uint256;
-
     struct Asset {
         uint256 id;
         string assetType;
@@ -36,6 +32,7 @@ library AssetTokenization {
     event AssetFragmented(uint256 indexed assetId, uint256 totalFragments);
     event FragmentTransferred(uint256 indexed assetId, address indexed from, address indexed to, uint256 amount);
     event AssetValueUpdated(uint256 indexed assetId, uint256 newValue);
+    event AssetOwnershipTransferred(uint256 indexed assetId, address indexed previousOwner, address indexed newOwner);
 
     /**
      * @dev Tokenize a new asset
@@ -53,25 +50,23 @@ library AssetTokenization {
         require(DataVerification.isValidAssetType(params.assetType), "Invalid asset type");
 
         uint256 assetId = uint256(keccak256(abi.encodePacked(block.timestamp, owner, params.assetType)));
-        
+        require(assets[assetId].id == 0, "Asset already exists");
+
         Asset storage newAsset = assets[assetId];
         newAsset.id = assetId;
         newAsset.assetType = params.assetType;
         newAsset.value = params.initialValue;
         newAsset.owner = owner;
         newAsset.isFragmented = params.isFragmented;
-        
+
         if (params.isFragmented) {
             require(params.totalFragments > 0, "Total fragments must be greater than zero");
             newAsset.totalFragments = params.totalFragments;
             newAsset.fragmentBalances[owner] = params.totalFragments;
+            emit AssetFragmented(assetId, params.totalFragments);
         }
 
         emit AssetTokenized(assetId, owner, params.initialValue);
-        
-        if (params.isFragmented) {
-            emit AssetFragmented(assetId, params.totalFragments);
-        }
 
         return assetId;
     }
@@ -88,6 +83,8 @@ library AssetTokenization {
         uint256 totalFragments
     ) internal {
         Asset storage asset = assets[assetId];
+        require(asset.id != 0, "Asset does not exist");
+        require(asset.owner == msg.sender, "Only the asset owner can fragment the asset");
         require(!asset.isFragmented, "Asset is already fragmented");
         require(totalFragments > 0, "Total fragments must be greater than zero");
 
@@ -114,11 +111,13 @@ library AssetTokenization {
         uint256 amount
     ) internal {
         Asset storage asset = assets[assetId];
+        require(asset.id != 0, "Asset does not exist");
         require(asset.isFragmented, "Asset is not fragmented");
+        require(from == msg.sender, "Caller is not the owner of the fragments");
         require(asset.fragmentBalances[from] >= amount, "Insufficient fragment balance");
 
-        asset.fragmentBalances[from] = asset.fragmentBalances[from].sub(amount);
-        asset.fragmentBalances[to] = asset.fragmentBalances[to].add(amount);
+        asset.fragmentBalances[from] -= amount;
+        asset.fragmentBalances[to] += amount;
 
         emit FragmentTransferred(assetId, from, to, amount);
     }
@@ -136,10 +135,33 @@ library AssetTokenization {
     ) internal {
         Asset storage asset = assets[assetId];
         require(asset.id != 0, "Asset does not exist");
+        require(asset.owner == msg.sender, "Only the asset owner can update the asset value");
 
         asset.value = newValue;
 
         emit AssetValueUpdated(assetId, newValue);
+    }
+
+    /**
+     * @dev Transfer ownership of an asset
+     * @param assets The mapping of asset IDs to Asset structs
+     * @param assetId The ID of the asset to transfer
+     * @param newOwner The address of the new owner
+     */
+    function transferAssetOwnership(
+        mapping(uint256 => Asset) storage assets,
+        uint256 assetId,
+        address newOwner
+    ) internal {
+        Asset storage asset = assets[assetId];
+        require(asset.id != 0, "Asset does not exist");
+        require(asset.owner == msg.sender, "Only the asset owner can transfer ownership");
+        require(ComplianceChecks.isVerifiedUser(newOwner), "New owner must be verified");
+
+        address previousOwner = asset.owner;
+        asset.owner = newOwner;
+
+        emit AssetOwnershipTransferred(assetId, previousOwner, newOwner);
     }
 
     /**
@@ -155,6 +177,7 @@ library AssetTokenization {
         address account
     ) internal view returns (uint256) {
         Asset storage asset = assets[assetId];
+        require(asset.id != 0, "Asset does not exist");
         require(asset.isFragmented, "Asset is not fragmented");
         return asset.fragmentBalances[account];
     }
@@ -172,10 +195,12 @@ library AssetTokenization {
         uint256 fragmentCount
     ) internal view returns (uint256) {
         Asset storage asset = assets[assetId];
+        require(asset.id != 0, "Asset does not exist");
         require(asset.isFragmented, "Asset is not fragmented");
+        require(fragmentCount > 0, "Fragment count must be greater than zero");
         require(fragmentCount <= asset.totalFragments, "Fragment count exceeds total fragments");
 
-        return asset.value.mul(fragmentCount).div(asset.totalFragments);
+        return (asset.value * fragmentCount) / asset.totalFragments;
     }
 
     /**
@@ -191,6 +216,7 @@ library AssetTokenization {
         address account
     ) internal view returns (bool) {
         Asset storage asset = assets[assetId];
+        require(asset.id != 0, "Asset does not exist");
         return asset.owner == account;
     }
 }
