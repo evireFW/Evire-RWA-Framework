@@ -2,7 +2,6 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/utils/Counters.sol";
 import "./interfaces/ICompliance.sol";
 
 /**
@@ -10,15 +9,13 @@ import "./interfaces/ICompliance.sol";
  * @dev Implements compliance rules for Real World Assets (RWA) on the blockchain
  */
 contract Compliance is ICompliance, Ownable {
-    using Counters for Counters.Counter;
-
     struct Rule {
         string name;
         string description;
         bool isActive;
     }
 
-    Counters.Counter private _ruleIdCounter;
+    uint256 private _ruleIdCounter;
     mapping(uint256 => Rule) public rules;
     mapping(address => bool) public whitelistedAddresses;
     mapping(address => mapping(uint256 => bool)) public addressCompliance;
@@ -30,7 +27,6 @@ contract Compliance is ICompliance, Ownable {
     event ComplianceUpdated(address indexed account, uint256 indexed ruleId, bool status);
 
     constructor() {
-        // Initialize with a default rule
         _addRule("KYC", "Know Your Customer verification");
     }
 
@@ -39,14 +35,14 @@ contract Compliance is ICompliance, Ownable {
     }
 
     function _addRule(string memory name, string memory description) internal {
-        uint256 ruleId = _ruleIdCounter.current();
+        uint256 ruleId = _ruleIdCounter;
         rules[ruleId] = Rule(name, description, true);
-        _ruleIdCounter.increment();
+        _ruleIdCounter += 1;
         emit RuleAdded(ruleId, name);
     }
 
     function updateRule(uint256 ruleId, bool isActive) external onlyOwner {
-        require(ruleId < _ruleIdCounter.current(), "Rule does not exist");
+        require(ruleId < _ruleIdCounter, "Rule does not exist");
         rules[ruleId].isActive = isActive;
         emit RuleUpdated(ruleId, rules[ruleId].name, isActive);
     }
@@ -62,7 +58,7 @@ contract Compliance is ICompliance, Ownable {
     }
 
     function updateAddressCompliance(address account, uint256 ruleId, bool status) external onlyOwner {
-        require(ruleId < _ruleIdCounter.current(), "Rule does not exist");
+        require(ruleId < _ruleIdCounter, "Rule does not exist");
         addressCompliance[account][ruleId] = status;
         emit ComplianceUpdated(account, ruleId, status);
     }
@@ -72,7 +68,7 @@ contract Compliance is ICompliance, Ownable {
             return false;
         }
 
-        for (uint256 i = 0; i < _ruleIdCounter.current(); i++) {
+        for (uint256 i = 0; i < _ruleIdCounter; i++) {
             if (rules[i].isActive && !addressCompliance[account][i]) {
                 return false;
             }
@@ -82,6 +78,6 @@ contract Compliance is ICompliance, Ownable {
     }
 
     function getRuleCount() public view returns (uint256) {
-        return _ruleIdCounter.current();
+        return _ruleIdCounter;
     }
 }
