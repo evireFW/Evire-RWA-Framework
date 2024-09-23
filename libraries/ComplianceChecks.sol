@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-import "@openzeppelin/contracts/security/Pausable.sol";
 
 /**
  * @title ComplianceChecks
@@ -24,6 +22,7 @@ library ComplianceChecks {
         uint256 maxInvestmentAmount;
         address complianceManager;
         bool restrictedTransfer;
+        bool paused;
     }
 
     event ComplianceStatusChanged(address indexed user, bool status);
@@ -32,6 +31,9 @@ library ComplianceChecks {
     event JurisdictionApprovalChanged(address indexed user, bytes32 jurisdiction, bool approved);
     event ComplianceCheckPerformed(address indexed user, uint256 timestamp);
     event RiskScoreUpdated(address indexed user, uint256 newScore);
+    event ComplianceManagerUpdated(address indexed newComplianceManager);
+    event CompliancePaused(address indexed by);
+    event ComplianceUnpaused(address indexed by);
 
     /**
      * @dev Initializes the compliance data structure
@@ -55,6 +57,40 @@ library ComplianceChecks {
         self.minHoldingPeriod = _minHoldingPeriod;
         self.maxInvestmentAmount = _maxInvestmentAmount;
         self.restrictedTransfer = _restrictedTransfer;
+        self.paused = false;
+    }
+
+    /**
+     * @dev Sets the compliance manager
+     * @param self The ComplianceData storage pointer
+     * @param _newComplianceManager The address of the new compliance manager
+     */
+    function setComplianceManager(ComplianceData storage self, address _newComplianceManager) internal {
+        require(msg.sender == self.complianceManager, "Only current compliance manager can update manager");
+        self.complianceManager = _newComplianceManager;
+        emit ComplianceManagerUpdated(_newComplianceManager);
+    }
+
+    /**
+     * @dev Pauses compliance checks
+     * @param self The ComplianceData storage pointer
+     */
+    function pauseCompliance(ComplianceData storage self) internal {
+        require(msg.sender == self.complianceManager, "Only compliance manager can pause compliance");
+        require(!self.paused, "Compliance is already paused");
+        self.paused = true;
+        emit CompliancePaused(msg.sender);
+    }
+
+    /**
+     * @dev Unpauses compliance checks
+     * @param self The ComplianceData storage pointer
+     */
+    function unpauseCompliance(ComplianceData storage self) internal {
+        require(msg.sender == self.complianceManager, "Only compliance manager can unpause compliance");
+        require(self.paused, "Compliance is not paused");
+        self.paused = false;
+        emit ComplianceUnpaused(msg.sender);
     }
 
     /**
@@ -74,6 +110,7 @@ library ComplianceChecks {
      * @param _status The KYC approval status
      */
     function setKYCApproval(ComplianceData storage self, address _address, bool _status) internal {
+        require(msg.sender == self.complianceManager, "Only compliance manager can set KYC approval");
         self.kycApproved[_address] = _status;
         emit ComplianceStatusChanged(_address, _status);
     }
@@ -95,6 +132,7 @@ library ComplianceChecks {
      * @param _status The accredited investor status
      */
     function setAccreditedInvestorStatus(ComplianceData storage self, address _address, bool _status) internal {
+        require(msg.sender == self.complianceManager, "Only compliance manager can set accredited investor status");
         self.accreditedInvestor[_address] = _status;
         emit AccreditationStatusChanged(_address, _status);
     }
@@ -105,6 +143,7 @@ library ComplianceChecks {
      * @param _address The address to blacklist
      */
     function addToBlacklist(ComplianceData storage self, address _address) internal {
+        require(msg.sender == self.complianceManager, "Only compliance manager can add to blacklist");
         self.blacklistedAddresses.add(_address);
         emit BlacklistStatusChanged(_address, true);
     }
@@ -115,6 +154,7 @@ library ComplianceChecks {
      * @param _address The address to remove from the blacklist
      */
     function removeFromBlacklist(ComplianceData storage self, address _address) internal {
+        require(msg.sender == self.complianceManager, "Only compliance manager can remove from blacklist");
         self.blacklistedAddresses.remove(_address);
         emit BlacklistStatusChanged(_address, false);
     }
@@ -142,6 +182,7 @@ library ComplianceChecks {
         bytes32 _jurisdiction,
         bool _approved
     ) internal {
+        require(msg.sender == self.complianceManager, "Only compliance manager can set jurisdiction approval");
         self.jurisdictionApproval[_address][_jurisdiction] = _approved;
         emit JurisdictionApprovalChanged(_address, _jurisdiction, _approved);
     }
@@ -168,6 +209,7 @@ library ComplianceChecks {
      * @param _score The new risk score
      */
     function updateRiskScore(ComplianceData storage self, address _address, uint256 _score) internal {
+        require(msg.sender == self.complianceManager, "Only compliance manager can update risk score");
         self.investorRiskScore[_address] = _score;
         emit RiskScoreUpdated(_address, _score);
     }
@@ -179,6 +221,7 @@ library ComplianceChecks {
      * @return bool True if the address passes all compliance checks, false otherwise
      */
     function performComplianceCheck(ComplianceData storage self, address _address) internal returns (bool) {
+        require(!self.paused, "Compliance checks are paused");
         bool isCompliant = isKYCApproved(self, _address) &&
             !isBlacklisted(self, _address) &&
             (self.investorRiskScore[_address] < 75); // Example risk threshold
@@ -203,12 +246,12 @@ library ComplianceChecks {
         address _to,
         uint256 _amount
     ) internal view returns (bool) {
+        require(!self.paused, "Compliance checks are paused");
         if (self.restrictedTransfer) {
             require(isKYCApproved(self, _to), "Recipient is not KYC approved");
             require(!isBlacklisted(self, _to), "Recipient is blacklisted");
             require(_amount <= self.maxInvestmentAmount, "Transfer amount exceeds maximum allowed");
         }
-
         return true;
     }
 
