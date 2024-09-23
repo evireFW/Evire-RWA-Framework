@@ -1,17 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
-import "@openzeppelin/contracts/utils/Strings.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /**
  * @title DataVerification
  * @dev Library for verifying and validating various types of data related to Real World Assets (RWA)
  */
 library DataVerification {
-    using SafeMath for uint256;
-    using Strings for uint256;
-
     // Custom errors
     error InvalidDataFormat();
     error DataOutOfRange();
@@ -43,6 +39,8 @@ library DataVerification {
         if (absValue < params.minValue || absValue > params.maxValue) {
             return false;
         }
+
+        // Optionally implement decimalPlaces check if applicable
 
         return true;
     }
@@ -76,7 +74,13 @@ library DataVerification {
      * @return bool True if the timestamp is valid, false otherwise
      */
     function verifyTimestamp(uint256 timestamp, uint256 maxAge) public view returns (bool) {
-        return timestamp <= block.timestamp && block.timestamp.sub(timestamp) <= maxAge;
+        if (timestamp > block.timestamp) {
+            return false;
+        }
+        if (block.timestamp - timestamp > maxAge) {
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -101,7 +105,13 @@ library DataVerification {
      * @return bool True if the coordinates are valid, false otherwise
      */
     function verifyGeographicCoordinates(int256 latitude, int256 longitude) public pure returns (bool) {
-        return latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180;
+        if (latitude < -90 || latitude > 90) {
+            return false;
+        }
+        if (longitude < -180 || longitude > 180) {
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -116,14 +126,14 @@ library DataVerification {
         }
 
         // Verify version (should be 4 for random UUID)
-        bytes1 version = uuid[6];
-        if ((version & 0xf0) != 0x40) {
+        uint8 version = uint8(uint8(uuid[6]) >> 4);
+        if (version != 4) {
             return false;
         }
 
         // Verify variant (should be 1)
-        bytes1 variant = uuid[8];
-        if ((variant & 0xc0) != 0x80) {
+        uint8 variant = uint8(uint8(uuid[8]) >> 6);
+        if (variant != 2) {
             return false;
         }
 
@@ -131,7 +141,7 @@ library DataVerification {
     }
 
     /**
-     * @dev Verifies the format of an ISO8601 date string
+     * @dev Verifies the format of an ISO8601 date string and checks for valid ranges
      * @param dateString The date string to verify
      * @return bool True if the date string is valid, false otherwise
      */
@@ -156,41 +166,42 @@ library DataVerification {
             }
         }
 
-        // Additional checks could be implemented for valid month/day ranges
+        // Parse year, month, and day
+        uint16 year = uint16((uint8(dateBytes[0]) - 48) * 1000 + (uint8(dateBytes[1]) - 48) * 100 + (uint8(dateBytes[2]) - 48) * 10 + (uint8(dateBytes[3]) - 48));
+        uint8 month = uint8((uint8(dateBytes[5]) - 48) * 10 + (uint8(dateBytes[6]) - 48));
+        uint8 day = uint8((uint8(dateBytes[8]) - 48) * 10 + (uint8(dateBytes[9]) - 48));
+
+        // Check valid month
+        if (month == 0 || month > 12) {
+            return false;
+        }
+
+        // Days in months
+        uint8[12] memory daysInMonth = [31,28,31,30,31,30,31,31,30,31,30,31];
+
+        // Check for leap year in February
+        if (month == 2 && ((year % 4 == 0 && year % 100 != 0) || (year % 400 == 0))) {
+            if (day == 0 || day > 29) {
+                return false;
+            }
+        } else {
+            if (day == 0 || day > daysInMonth[month - 1]) {
+                return false;
+            }
+        }
+
         return true;
     }
 
     /**
      * @dev Verifies a digital signature
-     * @param message The original message
+     * @param message The original message hash
      * @param signature The signature to verify
      * @param signer The address of the supposed signer
      * @return bool True if the signature is valid, false otherwise
      */
     function verifySignature(bytes32 message, bytes memory signature, address signer) public pure returns (bool) {
-        bytes32 r;
-        bytes32 s;
-        uint8 v;
-
-        if (signature.length != 65) {
-            return false;
-        }
-
-        assembly {
-            r := mload(add(signature, 32))
-            s := mload(add(signature, 64))
-            v := byte(0, mload(add(signature, 96)))
-        }
-
-        if (v < 27) {
-            v += 27;
-        }
-
-        if (v != 27 && v != 28) {
-            return false;
-        }
-
-        address recoveredAddress = ecrecover(message, v, r, s);
+        address recoveredAddress = ECDSA.recover(message, signature);
         return recoveredAddress == signer;
     }
 
@@ -201,7 +212,9 @@ library DataVerification {
      * @return bool True if all values are valid, false otherwise
      */
     function batchVerifyNumericValues(int256[] memory values, VerificationParams[] memory params) public pure returns (bool) {
-        require(values.length == params.length, "Mismatched array lengths");
+        if (values.length != params.length) {
+            return false;
+        }
 
         for (uint256 i = 0; i < values.length; i++) {
             if (!verifyNumericValue(values[i], params[i])) {
