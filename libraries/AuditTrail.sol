@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/utils/Counters.sol";
-import "@openzeppelin/contracts/access/AccessControl.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-
 /**
  * @title AuditTrail
  * @dev A library for creating and managing audit trails for Real World Assets (RWA) on the blockchain.
@@ -22,10 +18,12 @@ library AuditTrail {
     }
 
     struct AuditTrailStorage {
+        address admin;
         mapping(uint256 => AuditEntry) entries;
         Counters.Counter entryCount;
         mapping(bytes32 => bool) validActions;
         mapping(address => bool) authorizedAuditors;
+        mapping(bytes32 => uint256[]) assetEntries;
     }
 
     event AuditEntryAdded(uint256 indexed id, address indexed actor, bytes32 indexed action, bytes32 assetId);
@@ -33,6 +31,30 @@ library AuditTrail {
     event AuditorDeauthorized(address indexed auditor);
     event ActionAdded(bytes32 indexed action);
     event ActionRemoved(bytes32 indexed action);
+    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
+
+    /**
+     * @dev Initializes the audit trail with the given admin address.
+     * @param self The storage struct for the audit trail.
+     * @param admin The address to set as admin.
+     */
+    function initialize(AuditTrailStorage storage self, address admin) internal {
+        require(self.admin == address(0), "AuditTrail: Already initialized");
+        require(admin != address(0), "AuditTrail: Admin cannot be zero address");
+        self.admin = admin;
+    }
+
+    /**
+     * @dev Transfers adminship to a new address.
+     * @param self The storage struct for the audit trail.
+     * @param newAdmin The address of the new admin.
+     */
+    function transferAdminship(AuditTrailStorage storage self, address newAdmin) internal {
+        require(msg.sender == self.admin, "AuditTrail: Caller is not the admin");
+        require(newAdmin != address(0), "AuditTrail: New admin cannot be zero address");
+        emit AdminTransferred(self.admin, newAdmin);
+        self.admin = newAdmin;
+    }
 
     /**
      * @dev Adds a new audit entry to the trail.
@@ -65,6 +87,7 @@ library AuditTrail {
         });
 
         self.entries[newEntryId] = newEntry;
+        self.assetEntries[assetId].push(newEntryId);
 
         emit AuditEntryAdded(newEntryId, actor, action, assetId);
     }
@@ -86,6 +109,7 @@ library AuditTrail {
      * @param action The action to be added.
      */
     function addValidAction(AuditTrailStorage storage self, bytes32 action) internal {
+        require(msg.sender == self.admin, "AuditTrail: Caller is not the admin");
         require(!self.validActions[action], "AuditTrail: Action already exists");
         self.validActions[action] = true;
         emit ActionAdded(action);
@@ -97,6 +121,7 @@ library AuditTrail {
      * @param action The action to be removed.
      */
     function removeValidAction(AuditTrailStorage storage self, bytes32 action) internal {
+        require(msg.sender == self.admin, "AuditTrail: Caller is not the admin");
         require(self.validActions[action], "AuditTrail: Action does not exist");
         self.validActions[action] = false;
         emit ActionRemoved(action);
@@ -108,6 +133,7 @@ library AuditTrail {
      * @param auditor The address to authorize.
      */
     function authorizeAuditor(AuditTrailStorage storage self, address auditor) internal {
+        require(msg.sender == self.admin, "AuditTrail: Caller is not the admin");
         require(!self.authorizedAuditors[auditor], "AuditTrail: Auditor already authorized");
         self.authorizedAuditors[auditor] = true;
         emit AuditorAuthorized(auditor);
@@ -119,6 +145,7 @@ library AuditTrail {
      * @param auditor The address to deauthorize.
      */
     function deauthorizeAuditor(AuditTrailStorage storage self, address auditor) internal {
+        require(msg.sender == self.admin, "AuditTrail: Caller is not the admin");
         require(self.authorizedAuditors[auditor], "AuditTrail: Auditor not authorized");
         self.authorizedAuditors[auditor] = false;
         emit AuditorDeauthorized(auditor);
@@ -160,7 +187,11 @@ library AuditTrail {
      * @param endId The ending ID of the range.
      * @return An array of audit entries within the specified range.
      */
-    function getEntryRange(AuditTrailStorage storage self, uint256 startId, uint256 endId) internal view returns (AuditEntry[] memory) {
+    function getEntryRange(
+        AuditTrailStorage storage self,
+        uint256 startId,
+        uint256 endId
+    ) internal view returns (AuditEntry[] memory) {
         require(startId > 0 && startId <= self.entryCount.current(), "AuditTrail: Invalid start ID");
         require(endId >= startId && endId <= self.entryCount.current(), "AuditTrail: Invalid end ID");
 
@@ -172,5 +203,18 @@ library AuditTrail {
         }
 
         return rangeEntries;
+    }
+
+    /**
+     * @dev Retrieves all audit entry IDs for a given asset ID.
+     * @param self The storage struct for the audit trail.
+     * @param assetId The asset ID to retrieve entries for.
+     * @return An array of audit entry IDs associated with the asset ID.
+     */
+    function getEntriesByAssetId(
+        AuditTrailStorage storage self,
+        bytes32 assetId
+    ) internal view returns (uint256[] memory) {
+        return self.assetEntries[assetId];
     }
 }
