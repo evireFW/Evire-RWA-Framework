@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "./DataVerification.sol";
 import "./AssetValuation.sol";
 
@@ -10,8 +9,6 @@ import "./AssetValuation.sol";
  * @dev Library for assessing risks associated with Real World Assets (RWA) on blockchain
  */
 library RiskAssessment {
-    using SafeMath for uint256;
-
     // Risk categories
     enum RiskCategory { 
         MARKET,
@@ -40,24 +37,25 @@ library RiskAssessment {
 
     // Struct to hold risk parameters
     struct RiskParameters {
-        uint256 volatility;
-        uint256 correlationFactor;
-        uint256 defaultProbability;
-        uint256 recoveryRate;
-        uint256 liquidityRatio;
-        uint256 operationalErrorRate;
-        uint256 legalComplianceScore;
-        uint256 environmentalImpactScore;
+        uint256 volatility; // 0 to 100
+        uint256 correlationFactor; // 0 to 100
+        uint256 defaultProbability; // 0 to 100
+        uint256 recoveryRate; // 0 to 100
+        uint256 liquidityRatio; // 0 to 100
+        uint256 operationalErrorRate; // 0 to 100
+        uint256 legalComplianceScore; // 0 to 100
+        uint256 environmentalImpactScore; // 0 to 100
     }
 
     // Events
     event RiskAssessed(address indexed asset, RiskCategory category, RiskLevel level, uint256 score);
 
     // Constants
-    uint256 private constant RISK_THRESHOLD_LOW = 30;
-    uint256 private constant RISK_THRESHOLD_MEDIUM = 60;
-    uint256 private constant RISK_THRESHOLD_HIGH = 90;
     uint256 private constant PRECISION = 1e18;
+    uint256 private constant MAX_PERCENTAGE = 100;
+    uint256 private constant RISK_THRESHOLD_LOW = PRECISION * 30 / 100; // 30% of PRECISION
+    uint256 private constant RISK_THRESHOLD_MEDIUM = PRECISION * 60 / 100; // 60% of PRECISION
+    uint256 private constant RISK_THRESHOLD_HIGH = PRECISION * 90 / 100; // 90% of PRECISION
 
     /**
      * @dev Assess overall risk for an asset
@@ -69,7 +67,7 @@ library RiskAssessment {
         public 
         returns (RiskAssessmentResult[] memory) 
     {
-        RiskAssessmentResult[] memory results = new RiskAssessmentResult[](6);
+        RiskAssessmentResult;
 
         results[0] = assessMarketRisk(assetAddress, params.volatility, params.correlationFactor);
         results[1] = assessCreditRisk(assetAddress, params.defaultProbability, params.recoveryRate);
@@ -84,8 +82,8 @@ library RiskAssessment {
     /**
      * @dev Assess market risk for an asset
      * @param assetAddress Address of the asset contract
-     * @param volatility Asset price volatility
-     * @param correlationFactor Correlation with market benchmark
+     * @param volatility Asset price volatility (0 to 100)
+     * @param correlationFactor Correlation with market benchmark (0 to 100)
      * @return RiskAssessmentResult struct for market risk
      */
     function assessMarketRisk(address assetAddress, uint256 volatility, uint256 correlationFactor) 
@@ -109,8 +107,8 @@ library RiskAssessment {
     /**
      * @dev Assess credit risk for an asset
      * @param assetAddress Address of the asset contract
-     * @param defaultProbability Probability of default
-     * @param recoveryRate Expected recovery rate in case of default
+     * @param defaultProbability Probability of default (0 to 100)
+     * @param recoveryRate Expected recovery rate in case of default (0 to 100)
      * @return RiskAssessmentResult struct for credit risk
      */
     function assessCreditRisk(address assetAddress, uint256 defaultProbability, uint256 recoveryRate) 
@@ -134,7 +132,7 @@ library RiskAssessment {
     /**
      * @dev Assess liquidity risk for an asset
      * @param assetAddress Address of the asset contract
-     * @param liquidityRatio Liquidity ratio of the asset
+     * @param liquidityRatio Liquidity ratio of the asset (0 to 100)
      * @return RiskAssessmentResult struct for liquidity risk
      */
     function assessLiquidityRisk(address assetAddress, uint256 liquidityRatio) 
@@ -158,7 +156,7 @@ library RiskAssessment {
     /**
      * @dev Assess operational risk for an asset
      * @param assetAddress Address of the asset contract
-     * @param operationalErrorRate Rate of operational errors
+     * @param operationalErrorRate Rate of operational errors (0 to 100)
      * @return RiskAssessmentResult struct for operational risk
      */
     function assessOperationalRisk(address assetAddress, uint256 operationalErrorRate) 
@@ -182,7 +180,7 @@ library RiskAssessment {
     /**
      * @dev Assess legal risk for an asset
      * @param assetAddress Address of the asset contract
-     * @param legalComplianceScore Legal compliance score
+     * @param legalComplianceScore Legal compliance score (0 to 100)
      * @return RiskAssessmentResult struct for legal risk
      */
     function assessLegalRisk(address assetAddress, uint256 legalComplianceScore) 
@@ -206,7 +204,7 @@ library RiskAssessment {
     /**
      * @dev Assess environmental risk for an asset
      * @param assetAddress Address of the asset contract
-     * @param environmentalImpactScore Environmental impact score
+     * @param environmentalImpactScore Environmental impact score (0 to 100)
      * @return RiskAssessmentResult struct for environmental risk
      */
     function assessEnvironmentalRisk(address assetAddress, uint256 environmentalImpactScore) 
@@ -229,8 +227,8 @@ library RiskAssessment {
 
     /**
      * @dev Calculate market risk score
-     * @param volatility Asset price volatility
-     * @param correlationFactor Correlation with market benchmark
+     * @param volatility Asset price volatility (0 to 100)
+     * @param correlationFactor Correlation with market benchmark (0 to 100)
      * @return Market risk score
      */
     function calculateMarketRiskScore(uint256 volatility, uint256 correlationFactor) 
@@ -238,13 +236,17 @@ library RiskAssessment {
         pure 
         returns (uint256) 
     {
-        return volatility.mul(correlationFactor).div(PRECISION);
+        require(volatility <= MAX_PERCENTAGE, "Invalid volatility");
+        require(correlationFactor <= MAX_PERCENTAGE, "Invalid correlation factor");
+        uint256 volatilityFraction = (volatility * PRECISION) / MAX_PERCENTAGE;
+        uint256 correlationFraction = (correlationFactor * PRECISION) / MAX_PERCENTAGE;
+        return (volatilityFraction * correlationFraction) / PRECISION;
     }
 
     /**
      * @dev Calculate credit risk score
-     * @param defaultProbability Probability of default
-     * @param recoveryRate Expected recovery rate in case of default
+     * @param defaultProbability Probability of default (0 to 100)
+     * @param recoveryRate Expected recovery rate in case of default (0 to 100)
      * @return Credit risk score
      */
     function calculateCreditRiskScore(uint256 defaultProbability, uint256 recoveryRate) 
@@ -252,12 +254,16 @@ library RiskAssessment {
         pure 
         returns (uint256) 
     {
-        return defaultProbability.mul(PRECISION.sub(recoveryRate)).div(PRECISION);
+        require(defaultProbability <= MAX_PERCENTAGE, "Invalid default probability");
+        require(recoveryRate <= MAX_PERCENTAGE, "Invalid recovery rate");
+        uint256 defaultProbabilityFraction = (defaultProbability * PRECISION) / MAX_PERCENTAGE;
+        uint256 recoveryRateFraction = (recoveryRate * PRECISION) / MAX_PERCENTAGE;
+        return (defaultProbabilityFraction * (PRECISION - recoveryRateFraction)) / PRECISION;
     }
 
     /**
      * @dev Calculate liquidity risk score
-     * @param liquidityRatio Liquidity ratio of the asset
+     * @param liquidityRatio Liquidity ratio of the asset (0 to 100)
      * @return Liquidity risk score
      */
     function calculateLiquidityRiskScore(uint256 liquidityRatio) 
@@ -265,12 +271,14 @@ library RiskAssessment {
         pure 
         returns (uint256) 
     {
-        return PRECISION.sub(liquidityRatio);
+        require(liquidityRatio <= MAX_PERCENTAGE, "Invalid liquidity ratio");
+        uint256 liquidityFraction = (liquidityRatio * PRECISION) / MAX_PERCENTAGE;
+        return PRECISION - liquidityFraction;
     }
 
     /**
      * @dev Calculate operational risk score
-     * @param operationalErrorRate Rate of operational errors
+     * @param operationalErrorRate Rate of operational errors (0 to 100)
      * @return Operational risk score
      */
     function calculateOperationalRiskScore(uint256 operationalErrorRate) 
@@ -278,12 +286,14 @@ library RiskAssessment {
         pure 
         returns (uint256) 
     {
-        return operationalErrorRate.mul(2);  // Amplify the impact of operational errors
+        require(operationalErrorRate <= MAX_PERCENTAGE, "Invalid operational error rate");
+        uint256 errorRateFraction = (operationalErrorRate * PRECISION) / MAX_PERCENTAGE;
+        return errorRateFraction * 2;
     }
 
     /**
      * @dev Calculate legal risk score
-     * @param legalComplianceScore Legal compliance score
+     * @param legalComplianceScore Legal compliance score (0 to 100)
      * @return Legal risk score
      */
     function calculateLegalRiskScore(uint256 legalComplianceScore) 
@@ -291,12 +301,14 @@ library RiskAssessment {
         pure 
         returns (uint256) 
     {
-        return PRECISION.sub(legalComplianceScore);
+        require(legalComplianceScore <= MAX_PERCENTAGE, "Invalid legal compliance score");
+        uint256 complianceFraction = (legalComplianceScore * PRECISION) / MAX_PERCENTAGE;
+        return PRECISION - complianceFraction;
     }
 
     /**
      * @dev Calculate environmental risk score
-     * @param environmentalImpactScore Environmental impact score
+     * @param environmentalImpactScore Environmental impact score (0 to 100)
      * @return Environmental risk score
      */
     function calculateEnvironmentalRiskScore(uint256 environmentalImpactScore) 
@@ -304,7 +316,9 @@ library RiskAssessment {
         pure 
         returns (uint256) 
     {
-        return environmentalImpactScore.mul(3).div(2);  // Amplify the impact of environmental factors
+        require(environmentalImpactScore <= MAX_PERCENTAGE, "Invalid environmental impact score");
+        uint256 impactFraction = (environmentalImpactScore * PRECISION) / MAX_PERCENTAGE;
+        return (impactFraction * 3) / 2;
     }
 
     /**
