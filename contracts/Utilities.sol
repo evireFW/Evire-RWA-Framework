@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 
 /**
@@ -9,8 +8,6 @@ import "@openzeppelin/contracts/utils/Strings.sol";
  * @dev A library of utility functions for the Evire-RWA-Framework
  */
 library Utilities {
-    using SafeMath for uint256;
-
     /**
      * @dev Calculates the percentage of a value
      * @param value The total value
@@ -18,8 +15,7 @@ library Utilities {
      * @return The calculated percentage of the value
      */
     function calculatePercentage(uint256 value, uint256 percentage) internal pure returns (uint256) {
-        require(percentage <= 100, "Percentage must be between 0 and 100");
-        return value.mul(percentage).div(100);
+        return (value * percentage) / 100;
     }
 
     /**
@@ -38,7 +34,7 @@ library Utilities {
      * @return True if the strings are equal, false otherwise
      */
     function stringEqual(string memory a, string memory b) internal pure returns (bool) {
-        return keccak256(abi.encodePacked(a)) == keccak256(abi.encodePacked(b));
+        return keccak256(bytes(a)) == keccak256(bytes(b));
     }
 
     /**
@@ -50,9 +46,9 @@ library Utilities {
         require(values.length > 0, "Array must not be empty");
         uint256 sum = 0;
         for (uint256 i = 0; i < values.length; i++) {
-            sum = sum.add(values[i]);
+            sum += values[i];
         }
-        return sum.div(values.length);
+        return sum / values.length;
     }
 
     /**
@@ -90,13 +86,66 @@ library Utilities {
      * @return The string representation of the bytes32 data
      */
     function bytes32ToString(bytes32 data) internal pure returns (string memory) {
-        bytes memory bytesString = new bytes(32);
-        for (uint256 i; i < 32; i++) {
-            bytes1 char = bytes1(bytes32(uint256(data) * 2 ** (8 * i)));
-            if (char != 0) {
-                bytesString[i] = char;
+        uint8 i = 0;
+        while (i < 32 && data[i] != 0) {
+            i++;
+        }
+        bytes memory bytesArray = new bytes(i);
+        for (uint8 j = 0; j < i; j++) {
+            bytesArray[j] = data[j];
+        }
+        return string(bytesArray);
+    }
+
+    /**
+     * @dev Finds the minimum value in an array of uint256 values
+     * @param values The array of values
+     * @return The minimum value in the array
+     */
+    function findMinValue(uint256[] memory values) internal pure returns (uint256) {
+        require(values.length > 0, "Array must not be empty");
+        uint256 minValue = values[0];
+        for (uint256 i = 1; i < values.length; i++) {
+            if (values[i] < minValue) {
+                minValue = values[i];
             }
         }
-        return string(bytesString);
+        return minValue;
+    }
+
+    /**
+     * @dev Checks if a string is empty
+     * @param str The string to check
+     * @return True if the string is empty, false otherwise
+     */
+    function isStringEmpty(string memory str) internal pure returns (bool) {
+        return bytes(str).length == 0;
+    }
+
+    /**
+     * @dev Converts an address to a string
+     * @param addr The address to convert
+     * @return The string representation of the address
+     */
+    function addressToString(address addr) internal pure returns (string memory) {
+        return Strings.toHexString(uint256(uint160(addr)), 20);
+    }
+
+    /**
+     * @dev Converts a string to lowercase
+     * @param str The string to convert
+     * @return The lowercase version of the string
+     */
+    function toLower(string memory str) internal pure returns (string memory) {
+        bytes memory bStr = bytes(str);
+        bytes memory bLower = new bytes(bStr.length);
+        for (uint256 i = 0; i < bStr.length; i++) {
+            if ((bStr[i] >= 0x41) && (bStr[i] <= 0x5A)) {
+                bLower[i] = bytes1(uint8(bStr[i]) + 32);
+            } else {
+                bLower[i] = bStr[i];
+            }
+        }
+        return string(bLower);
     }
 }
