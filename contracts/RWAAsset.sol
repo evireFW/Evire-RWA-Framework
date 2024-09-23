@@ -5,6 +5,7 @@ import "@openzeppelin/contracts-upgradeable/token/ERC721/ERC721Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/CountersUpgradeable.sol";
@@ -22,12 +23,13 @@ import "../libraries/AuditTrail.sol";
  * @title RWAAsset
  * @dev Manages the lifecycle and operations of a Real World Asset (RWA) on the blockchain
  */
-contract RWAAsset is 
-    Initializable, 
-    ERC721Upgradeable, 
-    AccessControlUpgradeable, 
-    PausableUpgradeable, 
-    UUPSUpgradeable 
+contract RWAAsset is
+    Initializable,
+    ERC721Upgradeable,
+    AccessControlUpgradeable,
+    PausableUpgradeable,
+    ReentrancyGuardUpgradeable,
+    UUPSUpgradeable
 {
     using CountersUpgradeable for CountersUpgradeable.Counter;
     using AssetValuation for uint256;
@@ -69,6 +71,8 @@ contract RWAAsset is
     event AssetTokenized(uint256 indexed tokenId, uint256 tokenizationPercentage);
     event ShareTransferred(uint256 indexed tokenId, address from, address to, uint256 amount);
     event RiskLevelUpdated(uint256 indexed tokenId, RiskAssessment.RiskLevel newRiskLevel);
+    event AddressWhitelisted(address indexed account);
+    event AddressBlacklisted(address indexed account);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -84,6 +88,7 @@ contract RWAAsset is
         __ERC721_init(name, symbol);
         __AccessControl_init();
         __Pausable_init();
+        __ReentrancyGuard_init();
         __UUPSUpgradeable_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
@@ -103,6 +108,9 @@ contract RWAAsset is
         address custodian
     ) public onlyRole(MINTER_ROLE) returns (uint256) {
         require(custodian.isCompliant(), "Custodian is not compliant");
+        require(originalValue > 0, "Original value must be greater than zero");
+        require(bytes(assetType).length > 0, "Asset type must not be empty");
+        require(bytes(metadataURI).length > 0, "Metadata URI must not be empty");
 
         uint256 tokenId = _tokenIdCounter.current();
         _tokenIdCounter.increment();
@@ -128,6 +136,7 @@ contract RWAAsset is
 
     function updateAssetValue(uint256 tokenId, uint256 newValue) public onlyRole(ADMIN_ROLE) {
         require(_exists(tokenId), "Asset does not exist");
+        require(newValue > 0, "New value must be greater than zero");
         Asset storage asset = assets[tokenId];
 
         uint256 verifiedValue = newValue.verifyAssetValue(priceFeed);
@@ -149,6 +158,7 @@ contract RWAAsset is
         asset.isTokenized = true;
 
         uint256 tokenizedValue = asset.currentValue.calculateTokenizedValue(percentage);
+        assetShares[tokenId][asset.custodian] = tokenizedValue;
         tokenId.createTokenizedShares(tokenizedValue);
 
         tokenId.logTokenization(percentage);
@@ -156,11 +166,12 @@ contract RWAAsset is
         emit AssetTokenized(tokenId, percentage);
     }
 
-    function transferShares(uint256 tokenId, address to, uint256 amount) public whenNotPaused {
+    function transferShares(uint256 tokenId, address to, uint256 amount) public nonReentrant whenNotPaused {
         require(_exists(tokenId), "Asset does not exist");
         require(assets[tokenId].isTokenized, "Asset is not tokenized");
         require(assetShares[tokenId][msg.sender] >= amount, "Insufficient shares");
         require(whitelist[to], "Recipient is not whitelisted");
+        require(to != address(0), "Cannot transfer to zero address");
 
         assetShares[tokenId][msg.sender] -= amount;
         assetShares[tokenId][to] += amount;
@@ -190,11 +201,13 @@ contract RWAAsset is
     function whitelistAddress(address account) public onlyRole(ADMIN_ROLE) {
         require(!whitelist[account], "Address already whitelisted");
         whitelist[account] = true;
+        emit AddressWhitelisted(account);
     }
 
     function blacklistAddress(address account) public onlyRole(ADMIN_ROLE) {
         require(whitelist[account], "Address not whitelisted");
         whitelist[account] = false;
+        emit AddressBlacklisted(account);
     }
 
     function pause() public onlyRole(PAUSER_ROLE) {
@@ -205,20 +218,54 @@ contract RWAAsset is
         _unpause();
     }
 
+    function burnAsset(uint256 tokenId) public onlyRole(ADMIN_ROLE) {
+        require(_exists(tokenId), "Asset does not exist");
+        require(!assets[tokenId].isTokenized, "Cannot burn a tokenized asset");
+        _burn(tokenId);
+        delete assets[tokenId];
+    }
+
+    function getAsset(uint256 tokenId) public view returns (Asset memory) {
+        require(_exists(tokenId), "Asset does not exist");
+        return assets[tokenId];
+    }
+
+    function getAssetShares(uint256 tokenId, address account) public view returns (uint256) {
+        require(_exists(tokenId), "Asset does not exist");
+        return assetShares[tokenId][account];
+    }
+
+    function isAddressWhitelisted(address account) public view returns (bool) {
+        return whitelist[account];
+    }
+
     function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER_ROLE) {}
 
     // The following functions are overrides required by Solidity.
-    function supportsInterface(bytes4 interfaceId) public view override(ERC721Upgradeable, AccessControlUpgradeable) returns (bool) {
+    function supportsInterface(bytes4 interfaceId)
+        public
+        view
+        override(ERC721Upgradeable, AccessControlUpgradeable)
+        returns (bool)
+    {
         return super.supportsInterface(interfaceId);
     }
 
-    function _beforeTokenTransfer(address from, address to, uint256 tokenId, uint256 batchSize) internal override whenNotPaused {
+    function _beforeTokenTransfer(address from, address to, uint256 tokenId, uint256 batchSize)
+        internal
+        override
+        whenNotPaused
+    {
         super._beforeTokenTransfer(from, to, tokenId, batchSize);
 
-        require(whitelist[to], "Recipient is not whitelisted");
-        require(to.isCompliant(), "Recipient is not compliant");
+        if (to != address(0)) {
+            require(whitelist[to], "Recipient is not whitelisted");
+            require(to.isCompliant(), "Recipient is not compliant");
+        }
 
-        tokenId.verifyOwnershipTransfer(from, to);
+        if (from != address(0) && to != address(0)) {
+            tokenId.verifyOwnershipTransfer(from, to);
+        }
     }
 
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
